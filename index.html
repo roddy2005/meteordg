@@ -50,9 +50,7 @@
 <body>
   <canvas id="game"></canvas>
   <div id="ui">
-    <div class="hud">
-      <button class="btn" id="pauseBtn" aria-label="일시정지" type="button">⏸︎</button>
-    </div>
+    <div class="hud" style="display:none"></div>
     <div class="score-pill pill">점수 <b id="score">0</b></div>
     <div id="centerOverlay">
       <div class="panel">
@@ -101,9 +99,7 @@
     // DOM
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
-    const scoreEl = document.getElementById('score');
-    const pauseBtn = document.getElementById('pauseBtn');
-    const overlay = document.getElementById('centerOverlay');
+    const scoreEl = document.getElementById('score');    const overlay = document.getElementById('centerOverlay');
     const startBtn = document.getElementById('startBtn');
     const restartBtn = document.getElementById('restartBtn');
     const overlayTitle = document.getElementById('overlayTitle');
@@ -118,7 +114,7 @@
     // 캔버스 크기 & DPR (iOS 주소창/노치 대응: visualViewport 활용)
     const state = {
       w: 0, h: 0, dpr: 1,
-      running: false, paused: false,
+      running: false,
       time: 0, score: 0, lastSpawn: 0, spawnInterval: 1200,
       meteors: [],
       meteorParticles: [],
@@ -250,7 +246,6 @@
       overlay.hidden = true; overlay.style.display = 'none';
       gameOverBlock.hidden = true;
       state.running = true; state.paused = false;
-      pauseBtn.textContent = '⏸︎';
       resetGame();
       if (screen.orientation && screen.orientation.lock) {
         screen.orientation.lock('portrait').catch(()=>{});
@@ -273,14 +268,7 @@
       fetchLeaderboard();
     }
 
-    function togglePause() {
-      if(!state.running) return;
-      state.paused = !state.paused;
-      pauseBtn.textContent = state.paused ? '▶' : '⏸︎';
-      if(!state.paused) lastTs = performance.now();
-    }
-    pauseBtn.addEventListener('click', togglePause);
-    startBtn.addEventListener('click', startGame);
+        startBtn.addEventListener('click', startGame);
     startBtn.addEventListener('touchend', (e)=>{ e.preventDefault(); startGame(); }, {passive:false});
     restartBtn.addEventListener('click', ()=>{ startBtn.hidden = true; startGame(); });
     restartBtn.addEventListener('touchend', (e)=>{ e.preventDefault(); startGame(); }, {passive:false});
@@ -507,7 +495,7 @@
     function loop(ts){
       if(!state.running){ requestAnimationFrame(loop); return; }
       const dt = Math.min(32, ts - lastTs); lastTs = ts;
-      if(!state.paused){ update(dt); render(); }
+      update(dt); render();
       requestAnimationFrame(loop);
     }
     requestAnimationFrame(loop);
@@ -645,6 +633,8 @@
       assert('stars populated', totalStars >= 100);
       assert('nebulae populated', Array.isArray(state.nebulae) && state.nebulae.length >= 2);
 
+      assert('no pause button', !document.getElementById('pauseBtn'));
+      const t0 = state.time; update(16); assert('update not gated by pause', state.time > t0);
       console.log('[TEST] all passed');
       alert('All runtime tests passed.');
     }

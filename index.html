@@ -492,8 +492,21 @@
         const lerp = Math.min(1, 0.12 + 0.0003 * state.time); // 점점 더 민첩하게 회전
         state.ship.angle = a + diff * lerp;
       }
-      // 운석 이동
-      for(const m of state.meteors){ m.x += m.vx * dt/1000; m.y += m.vy * dt/1000; }
+      // 운석 이동 + 화면 밖 제거 + 충돌 체크
+      {
+        for (let i = state.meteors.length - 1; i >= 0; i--) {
+          const m = state.meteors[i];
+          m.x += m.vx * dt/1000; m.y += m.vy * dt/1000;
+          // 충돌 (살짝 관대한 반경)
+          const dx = m.x - state.ship.x, dy = m.y - state.ship.y;
+          const hitR = m.r + state.ship.r * 0.8;
+          if (dx*dx + dy*dy < hitR*hitR) { gameOver(); return; }
+          // 오프스크린 제거 (여유 마진 40px)
+          if (m.x < -m.r-40 || m.x > state.w + m.r + 40 || m.y < -m.r-40 || m.y > state.h + m.r + 40) {
+            state.meteors.splice(i,1);
+          }
+        }
+      }
       // 별자리/성운 드리프트 & 래핑
       for(const L of state.starLayers){
         for(const s of L.stars){
@@ -664,6 +677,8 @@
       fit(); const n1 = state.starLayers.reduce((a,L)=>a+L.stars.length,0); fit(); const n2 = state.starLayers.reduce((a,L)=>a+L.stars.length,0);
       assert('fit doesn\'t corrupt stars', n1>0 && n2>0);
 
+      // offscreen culling works
+      startGame(); const L0 = state.meteors.length; state.meteors.push({x:-9999,y:0,r:10,vx:-10,vy:0}); update(16); const L1 = state.meteors.length; assert('offscreen meteor culled', L1 === L0);
       console.log('[TEST] all passed');
       alert('All runtime tests passed.');
     }

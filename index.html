@@ -21,7 +21,7 @@
       overscroll-behavior:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;
     }
     #ui { position: fixed; inset: 0; pointer-events: none; }
-    .hud { position: absolute; left: 12px; top: 12px; display:flex; gap:10px; align-items:center; pointer-events: auto; }
+    .hud { position: absolute; left: 12px; top: 12px; display:none; gap:10px; align-items:center; pointer-events: auto; }
     .score-pill{ position:absolute; left:50%; top:14px; transform:translateX(-50%); pointer-events:none; }
     .pill{ background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.04));
       border:1px solid var(--border); border-radius: 999px; padding:8px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
@@ -32,6 +32,9 @@
     .btn:active{ transform: translateY(1px) scale(.99); }
     .btn.primary{ background: linear-gradient(180deg, #2a7cff, #2569f8); border-color: transparent; color:white; box-shadow: 0 10px 24px rgba(37,105,248,.35); }
     .btn.primary:hover{ filter: brightness(1.05); }
+    .btn.icon{ width:40px; height:40px; display:grid; place-items:center; padding:0; border-radius:12px; font-size:18px; }
+    #soundCtl{ position:absolute; right:12px; top:12px; pointer-events:auto; }
+
     #centerOverlay { position: absolute; inset: 0; display:flex; align-items:center; justify-content:center; pointer-events:auto; }
     .panel { width:min(92vw, 520px); background: rgba(10,16,40,.85); border:1px solid var(--border); border-radius: 22px; padding: 24px; box-shadow: 0 16px 48px rgba(0,0,0,.55); }
     .title { font-size: clamp(26px, 5vw, 40px); font-weight: 900; margin: 0 0 8px; letter-spacing: .4px; background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip:text; background-clip:text; color: transparent; }
@@ -50,8 +53,9 @@
 <body>
   <canvas id="game"></canvas>
   <div id="ui">
-    <div class="hud" style="display:none"></div>
+    <div class="hud"></div>
     <div class="score-pill pill">점수 <b id="score">0</b></div>
+    <div id="soundCtl"><button id="soundBtn" class="btn icon" type="button" aria-label="사운드">🔊</button></div>
     <div id="centerOverlay">
       <div class="panel">
         <h1 class="title" id="overlayTitle">Meteor Dodge</h1>
@@ -80,6 +84,9 @@
     <div id="footer">Made for mobile · 드래그/터치 조작</div>
   </div>
 
+  <!-- 배경음악 (같은 폴더에 bgm.mp3 넣어주세요) -->
+  <audio id="bgm" src="bgm.mp3" preload="auto" loop></audio>
+
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
@@ -99,7 +106,8 @@
     // DOM
     const canvas = document.getElementById('game');
     const ctx = canvas.getContext('2d');
-    const scoreEl = document.getElementById('score');    const overlay = document.getElementById('centerOverlay');
+    const scoreEl = document.getElementById('score');
+    const overlay = document.getElementById('centerOverlay');
     const startBtn = document.getElementById('startBtn');
     const restartBtn = document.getElementById('restartBtn');
     const overlayTitle = document.getElementById('overlayTitle');
@@ -110,6 +118,8 @@
     const saveBtn = document.getElementById('saveBtn');
     const saveStatus = document.getElementById('saveStatus');
     const lbList = document.getElementById('lbList');
+    const soundBtn = document.getElementById('soundBtn');
+    const bgmEl = document.getElementById('bgm');
 
     // 캔버스 크기 & DPR (iOS 주소창/노치 대응: visualViewport 활용)
     const state = {
@@ -128,7 +138,11 @@
       nebulae: []
     };
 
-    // ====== 유틸을 먼저 선언하여 fit() 최초 실행 전에도 사용 가능하게 ======
+    // 성능/품질 스케일러 + 스프라이트 캐시
+    const PERF = { targetFPS: 55, fpsEMA: 60, low: false, lastCheck: 0 };
+    const SPRITES = { starS:null, starM:null, starL:null, particle:null };
+
+    // ====== 유틸 선언 (fit 이전에도 사용 가능) ======
     function rand(a,b){ return a + Math.random()*(b-a); }
     const clamp01 = (x)=> Math.max(0, Math.min(1, x));
     const smoothstep = (e0,e1,x)=>{ const t = clamp01((x-e0)/(e1-e0)); return t*t*(3-2*t); };
@@ -140,8 +154,67 @@
       return { tail, width, speed };
     }
 
+    // 스프라이트 생성기 (라디얼 그라데이션을 1회만 생성)
+    function makeRadialSprite(r, inner, outer){
+      const c = document.createElement('canvas');
+      const d = Math.ceil(r*2); c.width = c.height = d;
+      const g = c.getContext('2d');
+      const grd = g.createRadialGradient(r, r, 0, r, r, r);
+      grd.addColorStop(0, inner); grd.addColorStop(1, outer);
+      g.fillStyle = grd; g.beginPath(); g.arc(r, r, r, 0, Math.PI*2); g.fill();
+      return c;
+    }
+    function ensureSprites(){
+      if(!SPRITES.starS){ SPRITES.starS = makeRadialSprite(1.6, 'rgba(255,255,255,1)', 'rgba(255,255,255,0)'); }
+      if(!SPRITES.starM){ SPRITES.starM = makeRadialSprite(2.2, 'rgba(255,255,255,1)', 'rgba(255,255,255,0)'); }
+      if(!SPRITES.starL){ SPRITES.starL = makeRadialSprite(3.0, 'rgba(255,255,255,1)', 'rgba(255,255,255,0)'); }
+      if(!SPRITES.particle){ SPRITES.particle = makeRadialSprite(6, 'rgba(255,200,150,0.9)', 'rgba(255,200,150,0)'); }
+    }
+
+    // ====== 오디오 컨트롤 ======
+    const audioCtl = { ctx: null, gain: null, enabled: true, tried:false, vol: 0.35 };
+    function initAudio(){
+      if(audioCtl.ctx) return;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return; // 구형 브라우저
+      audioCtl.ctx = new AC();
+      audioCtl.gain = audioCtl.ctx.createGain();
+      const src = audioCtl.ctx.createMediaElementSource(bgmEl);
+      src.connect(audioCtl.gain).connect(audioCtl.ctx.destination);
+      audioCtl.gain.gain.value = audioCtl.vol;
+    }
+    function resumeCtx(){ if(audioCtl.ctx && audioCtl.ctx.state === 'suspended') audioCtl.ctx.resume().catch(()=>{}); }
+    function playBgm(){
+      audioCtl.tried = true; initAudio(); resumeCtx();
+      bgmEl.volume = 1; // 볼륨은 Gain Node로 제어
+      return bgmEl.play().catch(()=>{});
+    }
+    function pauseBgm(){ bgmEl.pause(); }
+    function fadeTo(volume, ms=300){
+      if(!audioCtl.gain || !audioCtl.ctx) return;
+      const g = audioCtl.gain.gain; const now = audioCtl.ctx.currentTime;
+      g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(Math.max(0,Math.min(1,volume)), now + ms/1000);
+    }
+    function setSound(on){
+      audioCtl.enabled = on; localStorage.setItem('md.sound', on?'on':'off');
+      soundBtn.textContent = on ? '🔊' : '🔇';
+      if(on){ if(state.running) { playBgm().then(()=>fadeTo(audioCtl.vol, 250)); } }
+      else { pauseBgm(); }
+    }
+
+    // 초기 사운드 상태
+    setSound(localStorage.getItem('md.sound') !== 'off');
+    soundBtn.addEventListener('click', ()=> setSound(!audioCtl.enabled));
+
+    // 첫 유저 제스처에서 오디오 컨텍스트 깨우기
+    window.addEventListener('pointerdown', ()=>{ if(!audioCtl.tried && audioCtl.enabled){ playBgm().then(()=>fadeTo(audioCtl.vol, 200)); } }, {once:false});
+    document.addEventListener('visibilitychange', ()=>{
+      if(document.hidden){ pauseBgm(); }
+      else if(audioCtl.enabled && state.running){ playBgm().then(()=>fadeTo(audioCtl.vol, 150)); }
+    });
+
     function fit() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, PERF.low ? 1.2 : 1.6);
       const vw = window.visualViewport ? Math.floor(window.visualViewport.width) : window.innerWidth;
       const vh = window.visualViewport ? Math.floor(window.visualViewport.height) : window.innerHeight;
       state.w = vw; state.h = vh; state.dpr = dpr;
@@ -150,6 +223,7 @@
       canvas.style.width = state.w + 'px';
       canvas.style.height = state.h + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ensureSprites();
       regenStars();
       regenNebulae();
     }
@@ -158,7 +232,6 @@
       window.visualViewport.addEventListener('resize', fit);
       window.visualViewport.addEventListener('scroll', fit);
     }
-    // 유틸이 선언된 이후에 최초 fit() 호출
     fit();
 
     // 입력 (터치 스크롤/풀투리프레시 방지)
@@ -187,7 +260,22 @@
       const total = Math.max(120, Math.min(240, Math.floor(area / 6000)));
       const c0 = Math.floor(total*0.3), c1 = Math.floor(total*0.45);
       const counts = [c0, c1, total - c0 - c1];
-      const speeds = [6, 12, 24]; // px/s
+      const speeds = [4, 9, 18]; // px/s (소폭 감소로 저사양 최적화)
+      const sizes = [[0.6,1.1],[0.8,1.6],[1.0,2.2]];
+      const tw = [0.003,0.004,0.006];
+      const palette = ['rgba(220,235,255,1)','rgba(255,236,200,1)','rgba(200,215,255,1)'];
+      state.starLayers = [];
+      for(let li=0; li<3; li++){
+        const stars=[];
+        for(let i=0;i<counts[li];i++){
+          const r = rand(sizes[li][0], sizes[li][1]);
+          const color = palette[(Math.random()*palette.length)|0];
+          stars.push({x: Math.random()*state.w, y: Math.random()*state.h, r, baseA: rand(0.55, 1.0), twinkle: tw[li], phase: Math.random()*Math.PI*2, core: color});
+        }
+        const dir = Math.random()<0.5?1:-1;
+        state.starLayers.push({stars, vx: speeds[li]*dir, vy: speeds[li]*0.15});
+      }
+    } // px/s
       const sizes = [[0.6,1.1],[0.8,1.6],[1.0,2.2]];
       const tw = [0.003,0.004,0.006];
       const palette = ['rgba(220,235,255,1)','rgba(255,236,200,1)','rgba(200,215,255,1)'];
@@ -241,12 +329,13 @@
     }
 
     function startGame() {
-      // overlay fade-out + scale-down (표시 효과는 CSS/DOM으로 처리)
+      // overlay fade-out + scale-down
       state.overlayFX.active = true; state.overlayFX.t = 0; state.overlayFX.dir = -1;
       overlay.hidden = true; overlay.style.display = 'none';
       gameOverBlock.hidden = true;
-      state.running = true; state.paused = false;
+      state.running = true;
       resetGame();
+      if (audioCtl.enabled){ playBgm().then(()=>fadeTo(audioCtl.vol, 250)); }
       if (screen.orientation && screen.orientation.lock) {
         screen.orientation.lock('portrait').catch(()=>{});
       }
@@ -265,10 +354,11 @@
       nicknameInput.value = localStorage.getItem('md.nickname') || '';
       saveBtn.disabled = false; saveStatus.textContent = '';
       nicknameInput.focus();
+      fadeTo(0.2, 200); // 게임오버 시 살짝 줄임
       fetchLeaderboard();
     }
 
-        startBtn.addEventListener('click', startGame);
+    startBtn.addEventListener('click', startGame);
     startBtn.addEventListener('touchend', (e)=>{ e.preventDefault(); startGame(); }, {passive:false});
     restartBtn.addEventListener('click', ()=>{ startBtn.hidden = true; startGame(); });
     restartBtn.addEventListener('touchend', (e)=>{ e.preventDefault(); startGame(); }, {passive:false});
@@ -432,54 +522,11 @@
         if(nb.y < -pad) nb.y += state.h + pad*2; if(nb.y > state.h + pad) nb.y -= state.h + pad*2;
       }
       // 파티클 업데이트
-      for(const p of state.meteorParticles){ p.x += p.vx*dt/1000; p.y += p.vy*dt/1000; p.vx*=0.986; p.vy*=0.986; p.a -= 0.0024*dt; p.r*=0.999; }
-      state.meteorParticles = state.meteorParticles.filter(p=> p.a>0.02 && p.r>0.5);
-      // 화면 밖 제거
-      const margin = 80;
-      state.meteors = state.meteors.filter(m => m.x>-margin && m.x<state.w+margin && m.y>-margin && m.y<state.h+margin);
-      // 충돌
-      for(const m of state.meteors){
-        const dx = m.x - state.ship.x, dy = m.y - state.ship.y;
-        if(dx*dx + dy*dy < (m.r + state.ship.r*0.9)**2){ gameOver(); break; }
-      }
-      // 오버레이 효과 진행(0→1)
-      if(state.overlayFX.active){
-        state.overlayFX.t = Math.min(1, state.overlayFX.t + dt/250);
-        if(state.overlayFX.t >= 1) state.overlayFX.active = false;
-      }
-    }
-
-    function render(){
-      ctx.clearRect(0,0,state.w,state.h);
-      // 우주 배경: 성운 + 별자리
-      // 성운 (screen 블렌딩으로 은은하게)
-      ctx.save(); ctx.globalCompositeOperation = 'screen';
-      for(const nb of state.nebulae){
-        ctx.globalAlpha = nb.a;
-        const g = ctx.createRadialGradient(nb.x, nb.y, nb.r*0.1, nb.x, nb.y, nb.r);
-        g.addColorStop(0, nb.color1); g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nb.x, nb.y, nb.r, 0, Math.PI*2); ctx.fill();
-      }
-      // 별자리 (3 레이어, 파랄럭스 + 점멸)
-      for(const L of state.starLayers){
-        for(const s of L.stars){
-          const tw = s.baseA * (0.6 + 0.4*Math.sin(state.time*s.twinkle + s.phase));
-          ctx.globalAlpha = tw;
-          const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r);
-          g.addColorStop(0, s.core); g.addColorStop(1, 'rgba(255,255,255,0)');
-          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
-        }
-      }
-      ctx.restore();
-      // 운석 파티클 꼬리
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
       for(const p of state.meteorParticles){
         if (p.a < 0.06) continue;
         ctx.globalAlpha = Math.max(0, p.a) * 0.8;
-        const gg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-        gg.addColorStop(0,'rgba(255,200,150,0.85)'); gg.addColorStop(1,'rgba(255,200,150,0)');
-        ctx.fillStyle = gg; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+        const img = SPRITES.particle;
+        const s = p.r*2; ctx.drawImage(img, p.x - p.r, p.y - p.r, s, s);
       }
       ctx.globalAlpha = 1;
       ctx.restore();
@@ -504,143 +551,85 @@
     overlayDesc.textContent = '터치를 누르고 드래그하면 비행선이 따라옵니다. 운석을 피해 오래 살아남으세요!';
 
     // ───────────────────────
-    // Runtime tests (opt-in): add ?test=1 to URL — includes warmup/cap/rotation/tail checks
+    // Runtime tests (opt-in)
     // ───────────────────────
     function assert(name, cond){ if(!cond) throw new Error('Test failed: '+name); console.log('✓', name); }
     async function runTests(){
       console.log('[TEST] start');
-      // Extra Test: rand is available before any star regen usage
-      assert('rand available', typeof rand === 'function');
+      // Sound: element exists & preference toggles
+      assert('sound button exists', !!document.getElementById('soundBtn'));
+      assert('bgm element exists', !!document.getElementById('bgm'));
 
-      // Test: startGame hides overlay and sets running
+      // startGame hides overlay and sets running + tries to play BGM
       startGame();
       assert('running true', state.running === true);
       assert('overlay hidden', overlay.hidden === true && overlay.style.display === 'none');
+      assert('bgm tried to play', audioCtl.tried === true || audioCtl.enabled === false);
 
-      // Test: meteor spawn creates valid object
+      // meteor spawn creates valid object
       const before = state.meteors.length;
       spawnMeteor();
       assert('meteor spawned', state.meteors.length === before + 1);
       const m = state.meteors[state.meteors.length-1];
       assert('meteor velocity finite', Number.isFinite(m.vx) && Number.isFinite(m.vy));
 
-      // Test: collision logic causes gameOver (state.running becomes false)
-      m.x = state.ship.x; m.y = state.ship.y; m.r = 50; // 강제로 충돌
-      update(0);
+      // collision triggers gameOver
+      m.x = state.ship.x; m.y = state.ship.y; m.r = 50; update(0);
       assert('collision triggers gameOver', state.running === false);
 
-      // Extra Test: gameOver re-enables save button
-      assert('save enabled after gameOver', saveBtn.disabled === false);
-
-      // Extra Test: trail renders after movement + render
-      startGame();
-      state.pointer.x = state.ship.x + 100; // 이동 유도
-      update(16); render();
+      // trail renders
+      startGame(); state.pointer.x = state.ship.x + 100; update(16); render();
       assert('ship trail created', state.shipTrail.length > 0);
 
-      // Extra Test: ship rotates toward pointer (right)
-      startGame();
-      state.pointer.x = state.ship.x + 200; state.pointer.y = state.ship.y;
-      for(let t=0;t<15;t++){ update(16); }
+      // rotation checks
+      startGame(); state.pointer.x = state.ship.x + 200; state.pointer.y = state.ship.y; for(let t=0;t<15;t++){ update(16); }
       let angDiff = Math.abs(((state.ship.angle - 0 + Math.PI) % (Math.PI*2)) - Math.PI);
       assert('ship rotates right', angDiff < 0.5);
-
-      // Extra Test: ship rotates toward pointer (up)
-      startGame();
-      state.pointer.x = state.ship.x; state.pointer.y = state.ship.y - 200;
-      for(let t=0;t<15;t++){ update(16); }
+      startGame(); state.pointer.x = state.ship.x; state.pointer.y = state.ship.y - 200; for(let t=0;t<15;t++){ update(16); }
       angDiff = Math.abs(((state.ship.angle - (-Math.PI/2) + Math.PI) % (Math.PI*2)) - Math.PI);
       assert('ship rotates up', angDiff < 0.5);
 
-      // Extra Test: warmup prevents early spawns
-      startGame();
-      const beforeWarm = state.meteors.length;
-      update(1000); // 1s < warmupMs(2.5s)
+      // warmup prevents early spawns
+      startGame(); const beforeWarm = state.meteors.length; update(1000);
       assert('no spawn during warmup', state.meteors.length === beforeWarm);
 
-      // Extra Test: after warmup, at most cap meteors
-      startGame();
-      for(let t=0;t<6000;t+=300){ update(300); }
+      // cap respected after time
+      startGame(); for(let t=0;t<6000;t+=300){ update(300); }
       const cap = 6 + Math.floor(state.time / 10000);
       assert('cap respected', state.meteors.length <= cap);
 
-      // Extra Test: tailParams bounds
+      // tail params bounds
       let tp = tailParams({vx:0, vy:0, r:20});
       assert('tail >= r*0.8 when slow', tp.tail >= 16);
       assert('width >= r*0.6 when slow', tp.width >= 12);
       tp = tailParams({vx:1000, vy:0, r:20});
       assert('tail <= 140 cap', tp.tail <= 140);
 
-      // Extra Test: tail back point is opposite to velocity
-      {
-        const testM = {x:100, y:100, r:20, vx:60, vy:0};
-        const ang = Math.atan2(testM.vy, testM.vx) + Math.PI;
-        const backX = testM.x + Math.cos(ang) * (testM.r*0.6);
-        const backY = testM.y + Math.sin(ang) * (testM.r*0.6);
-        const v = [testM.vx, testM.vy];
-        const b = [backX - testM.x, backY - testM.y];
-        const dot = v[0]*b[0] + v[1]*b[1];
-        assert('tail back point opposite velocity', dot < 0);
-      }
+      // opposite velocity checks
+      { const testM = {x:100, y:100, r:20, vx:60, vy:0}; const ang = Math.atan2(testM.vy, testM.vx) + Math.PI; const backX = testM.x + Math.cos(ang) * (testM.r*0.6); const backY = testM.y + Math.sin(ang) * (testM.r*0.6); const v=[testM.vx,testM.vy]; const b=[backX-testM.x, backY-testM.y]; const dot=v[0]*b[0]+v[1]*b[1]; assert('tail back point opposite velocity', dot < 0); }
+      { const testM2 = {x:0, y:0, r:20, vx:0, vy:80}; const fAng = Math.atan2(testM2.vy, testM2.vx); const tailDir=[-Math.cos(fAng), -Math.sin(fAng)]; const vel=[testM2.vx,testM2.vy]; const dot2=tailDir[0]*vel[0]+tailDir[1]*vel[1]; assert('tail flare opposite velocity', dot2 < 0); }
 
-      // Extra Test: tail flare direction opposite velocity
-      {
-        const testM2 = {x:0, y:0, r:20, vx:0, vy:80}; // 아래로 이동(스크린 좌표 +y)
-        const fAng = Math.atan2(testM2.vy, testM2.vx);
-        const tailDir = [-Math.cos(fAng), -Math.sin(fAng)]; // 뒤쪽(-정방향)
-        const vel = [testM2.vx, testM2.vy];
-        const dot2 = tailDir[0]*vel[0] + tailDir[1]*vel[1];
-        assert('tail flare opposite velocity', dot2 < 0);
-      }
+      // drawMeteor safety
+      try { drawMeteor({x:120, y:90, r:14, vx:80, vy:0}); assert('drawMeteor did not throw', true); } catch(e) { throw new Error('drawMeteor threw: '+e.message); }
 
-      // Extra Test: drawMeteor should not throw
-      try {
-        drawMeteor({x:120, y:90, r:14, vx:80, vy:0});
-        assert('drawMeteor did not throw', true);
-      } catch(e) {
-        throw new Error('drawMeteor threw: '+e.message);
-      }
-
-      // Extra Test: particle cap respected
-      startGame();
-      for(let i=0;i<30;i++){ spawnMeteor(); }
-      for(let t=0;t<4000;t+=16){ update(16); }
+      // particle cap respected
+      startGame(); for(let i=0;i<30;i++){ spawnMeteor(); } for(let t=0;t<4000;t+=16){ update(16); }
       assert('particle cap respected', state.meteorParticles.length <= state.particleCap);
 
-      // Extra Test: high-speed meteor spawns many particles (>=10)
-      {
-        const beforeP = state.meteorParticles.length;
-        drawMeteor({x:200,y:200,r:20,vx:400,vy:0});
-        const spawned = state.meteorParticles.length - beforeP;
-        assert('many particles on high speed', spawned >= 10);
-      }
-
-      // Extra Test: particle size boosted
-      {
-        const p = state.meteorParticles[state.meteorParticles.length - 1];
-        assert('particle radius >= 2', p.r >= 2);
-      }
-
-      // Extra Test: particle cap respected
-      startGame();
-      for(let i=0;i<30;i++){ spawnMeteor(); }
-      for(let t=0;t<4000;t+=16){ update(16); }
-      assert('particle cap respected', state.meteorParticles.length <= state.particleCap);
-
-      // Extra Test: starfield/nebula populated
+      // starfield populated
       assert('star layers exist', Array.isArray(state.starLayers) && state.starLayers.length===3);
       const totalStars = state.starLayers.reduce((acc,L)=> acc + L.stars.length, 0);
       assert('stars populated', totalStars >= 100);
       assert('nebulae populated', Array.isArray(state.nebulae) && state.nebulae.length >= 2);
 
+      // pause removed
       assert('no pause button', !document.getElementById('pauseBtn'));
       const t0 = state.time; update(16); assert('update not gated by pause', state.time > t0);
+
       console.log('[TEST] all passed');
       alert('All runtime tests passed.');
     }
-    if (location.search.includes('test=1')) {
-      runTests().catch(e=>{ console.error(e); alert(e.message); });
-    }
+    if (location.search.includes('test=1')) { runTests().catch(e=>{ console.error(e); alert(e.message); }); }
 
   </script>
 

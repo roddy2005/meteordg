@@ -171,7 +171,7 @@
     }
 
     // ====== 신스 BGM (파일 없이 WebAudio로 생성) ======
-    const audioCtl = { ctx:null, master:null, gain:null, enabled:true, tried:false, vol:0.35, playing:false, timer:null, nextTime:0, bpm:92, step:0, lookahead:0.12, stepDur:0 };
+    const audioCtl = { ctx:null, master:null, gain:null, enabled:true, tried:false, vol:0.35, playing:false, timer:null, nextTime:0, bpm:104, step:0, lookahead:0.12, stepDur:0 };
 
     function initAudio(){
       if(audioCtl.ctx) return;
@@ -182,7 +182,7 @@
       master.connect(ctxA.destination);
       audioCtl.gain = master; // 기존 fadeTo와 호환
       // 살짝 부드럽게 하는 로우패스
-      const lp = ctxA.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 12000; master.connect(lp); lp.connect(ctxA.destination);
+      const lp = ctxA.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 15000; master.connect(lp); lp.connect(ctxA.destination);
     }
     function resumeCtx(){ if(audioCtl.ctx && audioCtl.ctx.state === 'suspended') audioCtl.ctx.resume().catch(()=>{}); }
 
@@ -197,7 +197,7 @@
     }
     function note(freq, when, len=0.22, vel=0.06, type='triangle'){ tone(type, freq, when, len, vel); }
 
-    // 스케줄러: A Aeolian (라) 스케일로 잔잔한 패턴
+    // 스케줄러: A Dorian (라 도리안) 스케일로 살짝 더 밝은 패턴
     function startSynth(){
       if(audioCtl.playing) return; initAudio(); resumeCtx();
       const a = audioCtl.ctx; if(!a) return;
@@ -205,13 +205,15 @@
       audioCtl.stepDur = 60 / audioCtl.bpm / 2; // 8분음표 단위
       audioCtl.nextTime = a.currentTime + 0.05;
       const root = 220; // A3
-      const scale = [0, 2, 3, 5, 7, 8, 10, 12].map(s=> root*Math.pow(2, s/12));
-      const arpIdx = [0, 2, 4, 7, 4, 2, 0, 9]; // 간단한 왕복
+      const scale = [0, 2, 3, 5, 7, 9, 10, 12].map(s=> root*Math.pow(2, s/12)); // A Dorian: A B C D E F# G A
+      const arpIdx = [0, 2, 4, 5, 4, 2, 0, 7]; // 6도(F#)와 옥타브를 더 자주 사용 // 간단한 왕복
 
       function schedule(time){
         const s = audioCtl.step % arpIdx.length;
         // 아르페지오(상단)
         note(scale[arpIdx[s]%scale.length], time, 0.18, 0.035, 'triangle');
+        // 살짝 밝게: 동일 음의 옥타브 위를 약하게 겹침
+        note(scale[arpIdx[s]%scale.length]*2, time, 0.14, 0.02, 'square');
         // 베이스(하단): 4스텝마다 루트/5도 교차
         if(audioCtl.step % 4 === 0){
           const bass = (audioCtl.step/4)%2===0 ? root : root*Math.pow(2,7/12);

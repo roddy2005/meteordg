@@ -171,7 +171,7 @@
     }
 
     // ====== 신스 BGM (파일 없이 WebAudio로 생성) ======
-    const audioCtl = { ctx:null, master:null, gain:null, enabled:true, tried:false, vol:0.35, playing:false, timer:null, nextTime:0, bpm:104, step:0, lookahead:0.12, stepDur:0 };
+    const audioCtl = { ctx:null, master:null, gain:null, enabled:true, tried:false, vol:0.35, playing:false, timer:null, nextTime:0, bpm:122, step:0, lookahead:0.12, stepDur:0 };
 
     function initAudio(){
       if(audioCtl.ctx) return;
@@ -179,10 +179,11 @@
       const ctxA = audioCtl.ctx = new AC();
       const master = audioCtl.master = ctxA.createGain();
       master.gain.value = 0.0; // 페이드로 올림
-      master.connect(ctxA.destination);
       audioCtl.gain = master; // 기존 fadeTo와 호환
-      // 살짝 부드럽게 하는 로우패스
-      const lp = ctxA.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 15000; master.connect(lp); lp.connect(ctxA.destination);
+      // 밝고 선명한 EQ 체인: 하이패스→로우패스 직렬
+      const hp = ctxA.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = 80;
+      const lp = ctxA.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value = 18000;
+      master.connect(hp); hp.connect(lp); lp.connect(ctxA.destination);
     }
     function resumeCtx(){ if(audioCtl.ctx && audioCtl.ctx.state === 'suspended') audioCtl.ctx.resume().catch(()=>{}); }
 
@@ -197,32 +198,93 @@
     }
     function note(freq, when, len=0.22, vel=0.06, type='triangle'){ tone(type, freq, when, len, vel); }
 
-    // 스케줄러: A Dorian (라 도리안) 스케일로 살짝 더 밝은 패턴
+    // --- 퍼커션/플럭 보조 ---
+    let NOISEBUF = null;
+    function ensureNoise(){
+      const a = audioCtl.ctx; if(!a) return;
+      if(NOISEBUF) return;
+      const len = a.sampleRate * 1; // 1초 버퍼 생성 후 재사용
+      const buf = a.createBuffer(1, len, a.sampleRate);
+      const data = buf.getChannelData(0);
+      for(let i=0;i<len;i++) data[i] = Math.random()*2-1;
+      NOISEBUF = buf;
+    }
+    function hat(when, dur=0.05, vel=0.025){
+      const a = audioCtl.ctx; if(!a) return; ensureNoise();
+      const src = a.createBufferSource(); src.buffer = NOISEBUF;
+      const hp = a.createBiquadFilter(); hp.type='highpass'; hp.frequency.value = 6000;
+      const g = a.createGain();
+      g.gain.setValueAtTime(vel, when);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+      src.connect(hp).connect(g).connect(audioCtl.master);
+      src.start(when); src.stop(when + dur + 0.05);
+    }
+    function clap(when, vel=0.05){
+      const a = audioCtl.ctx; if(!a) return; ensureNoise();
+      const times = [0, 0.01, 0.02];
+      times.forEach((ofs,i)=>{
+        const src = a.createBufferSource(); src.buffer = NOISEBUF;
+        const bp = a.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value = 1500; bp.Q.value = 0.6;
+        const g = a.createGain(); const t = when + ofs;
+        g.gain.setValueAtTime(vel*(1 - i*0.2), t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+        src.connect(bp).connect(g).connect(audioCtl.master);
+        src.start(t); src.stop(t + 0.13);
+      });
+    }
+    function pluck(when, freq, len=0.16, vel=0.04){
+      const a = audioCtl.ctx; if(!a) return;
+      const g = a.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(vel, when + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+      const o1 = a.createOscillator(); const o2 = a.createOscillator();
+      o1.type='square'; o2.type='square';
+      o1.frequency.setValueAtTime(freq, when); o2.frequency.setValueAtTime(freq, when);
+      o1.detune.setValueAtTime(-6, when); o2.detune.setValueAtTime(5, when);
+      o1.connect(g); o2.connect(g); g.connect(audioCtl.master);
+      o1.start(when); o2.start(when);
+      o1.stop(when + len + 0.05); o2.stop(when + len + 0.05);
+    }
+
+    // 스케줄러: A Major (메이저 진행)로 더 밝은 패턴
     function startSynth(){
       if(audioCtl.playing) return; initAudio(); resumeCtx();
       const a = audioCtl.ctx; if(!a) return;
       audioCtl.playing = true; audioCtl.tried = true;
       audioCtl.stepDur = 60 / audioCtl.bpm / 2; // 8분음표 단위
       audioCtl.nextTime = a.currentTime + 0.05;
+
       const root = 220; // A3
-      const scale = [0, 2, 3, 5, 7, 9, 10, 12].map(s=> root*Math.pow(2, s/12)); // A Dorian: A B C D E F# G A
-      const arpIdx = [0, 2, 4, 5, 4, 2, 0, 7]; // 6도(F#)와 옥타브를 더 자주 사용 // 간단한 왕복
+      const semitone = (n)=> root*Math.pow(2, n/12);
+      // I–V–vi–IV (A, E, F#m, D)
+      const prog = [
+        {root:0, triad:[0,4,7], bass:0},   // A
+        {root:7, triad:[0,4,7], bass:7},   // E
+        {root:9, triad:[0,3,7], bass:9},   // F#m
+        {root:5, triad:[0,4,7], bass:5}    // D
+      ];
 
       function schedule(time){
-        const s = audioCtl.step % arpIdx.length;
-        // 아르페지오(상단)
-        note(scale[arpIdx[s]%scale.length], time, 0.18, 0.035, 'triangle');
-        // 살짝 밝게: 동일 음의 옥타브 위를 약하게 겹침
-        note(scale[arpIdx[s]%scale.length]*2, time, 0.14, 0.02, 'square');
-        // 베이스(하단): 4스텝마다 루트/5도 교차
-        if(audioCtl.step % 4 === 0){
-          const bass = (audioCtl.step/4)%2===0 ? root : root*Math.pow(2,7/12);
-          note(bass, time, 0.28, 0.06, 'sine');
+        const stepInBar = audioCtl.step % 8; // 8스텝=한 마디(4/4 8분음표)
+        const bar = Math.floor((audioCtl.step/8)) % prog.length;
+        const ch = prog[bar];
+        const arpOrder = [0,1,2,1,0,1,2,1];
+        const idx = arpOrder[stepInBar];
+        const noteSemi = ch.root + ch.triad[idx];
+        const freq = semitone(noteSemi);
+        // 밝은 플럭 + 옥타브 레이어
+        pluck(time, freq, 0.14, 0.05);
+        if(stepInBar % 2 === 1) pluck(time, freq*2, 0.10, 0.03);
+        // 베이스: 다운비트마다(0,2,4,6)
+        if(stepInBar % 2 === 0){
+          const bFreq = semitone(ch.bass - 12);
+          note(bFreq, time, 0.22, 0.065, 'sine');
         }
-        // 패드(살짝 숨쉬는 톤)
-        if(audioCtl.step % 8 === 2){
-          note(root*Math.pow(2,12/12), time, 0.6, 0.02, 'sawtooth');
-        }
+        // 퍼커션: 하이햇(매 스텝) + 클랩(2,4박)
+        hat(time, 0.03, 0.03);
+        if(stepInBar===2 || stepInBar===6){ clap(time, 0.05); }
+
         audioCtl.step++;
       }
       function scheduler(){

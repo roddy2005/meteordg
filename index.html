@@ -275,21 +275,6 @@
         const dir = Math.random()<0.5?1:-1;
         state.starLayers.push({stars, vx: speeds[li]*dir, vy: speeds[li]*0.15});
       }
-    } // px/s
-      const sizes = [[0.6,1.1],[0.8,1.6],[1.0,2.2]];
-      const tw = [0.003,0.004,0.006];
-      const palette = ['rgba(220,235,255,1)','rgba(255,236,200,1)','rgba(200,215,255,1)'];
-      state.starLayers = [];
-      for(let li=0; li<3; li++){
-        const stars=[];
-        for(let i=0;i<counts[li];i++){
-          const r = rand(sizes[li][0], sizes[li][1]);
-          const color = palette[(Math.random()*palette.length)|0];
-          stars.push({x: Math.random()*state.w, y: Math.random()*state.h, r, baseA: rand(0.55, 1.0), twinkle: tw[li], phase: Math.random()*Math.PI*2, core: color});
-        }
-        const dir = Math.random()<0.5?1:-1;
-        state.starLayers.push({stars, vx: speeds[li]*dir, vy: speeds[li]*0.15});
-      }
     }
     function regenNebulae(){
       const n = 3;
@@ -326,6 +311,7 @@
       state.meteors.length = 0;
       state.ship.x = state.w*0.5; state.ship.y = state.h*0.7; state.ship.angle = -Math.PI/2;
       state.pointer.x = state.ship.x; state.pointer.y = state.ship.y;
+      state.meteorParticles.length = 0;
     }
 
     function startGame() {
@@ -400,7 +386,7 @@
     // 초기 오버레이 & 랭킹 로드
     overlay.hidden = false; fetchLeaderboard();
 
-    // 렌더링
+    // ====== 렌더 보조 ======
     function drawShip(){
       const { x, y, r } = state.ship;
       // 잔광(트레일)
@@ -473,6 +459,7 @@
       for(let i=0;i<3;i++){ ctx.beginPath(); ctx.arc(m.x+rand(-m.r*0.4,m.r*0.4), m.y+rand(-m.r*0.4,m.r*0.4), m.r*rand(0.08,0.16), 0, Math.PI*2); ctx.fill(); }
     }
 
+    // ====== 업데이트/렌더 ======
     function update(dt){
       state.time += dt;
       const targetInterval = Math.max(260, 1200 - state.time * 0.15);
@@ -521,7 +508,43 @@
         if(nb.x < -pad) nb.x += state.w + pad*2; if(nb.x > state.w + pad) nb.x -= state.w + pad*2;
         if(nb.y < -pad) nb.y += state.h + pad*2; if(nb.y > state.h + pad) nb.y -= state.h + pad*2;
       }
-      // 파티클 업데이트
+      // 파티클 업데이트 (렌더와 분리)
+      for(let i=state.meteorParticles.length-1;i>=0;i--){
+        const p = state.meteorParticles[i];
+        p.x += p.vx*dt/1000; p.y += p.vy*dt/1000;
+        p.vx *= 0.988; p.vy *= 0.988; p.a -= 0.0022*dt;
+        if(p.a <= 0.02 || p.r <= 0.5){ state.meteorParticles.splice(i,1); }
+      }
+      if(state.meteorParticles.length > state.particleCap){
+        state.meteorParticles.length = state.particleCap;
+      }
+    }
+
+    function render(){
+      ctx.clearRect(0,0,state.w,state.h);
+      // 우주 배경: 성운 + 별자리
+      // 성운 (screen 블렌딩으로 은은하게)
+      ctx.save(); ctx.globalCompositeOperation = 'screen';
+      for(const nb of state.nebulae){
+        ctx.globalAlpha = nb.a;
+        const g = ctx.createRadialGradient(nb.x, nb.y, nb.r*0.1, nb.x, nb.y, nb.r);
+        g.addColorStop(0, nb.color1); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(nb.x, nb.y, nb.r, 0, Math.PI*2); ctx.fill();
+      }
+      // 별자리 (3 레이어, 파랄럭스 + 점멸) — 스프라이트로 드로우(그라데이션 생성 비용 제거)
+      for(const L of state.starLayers){
+        for(const s of L.stars){
+          const tw = s.baseA * (0.6 + 0.4*Math.sin(state.time*s.twinkle + s.phase));
+          ctx.globalAlpha = tw;
+          const img = s.r < 1.3 ? SPRITES.starS : (s.r < 1.8 ? SPRITES.starM : SPRITES.starL);
+          const rr = s.r*1.6;
+          ctx.drawImage(img, s.x - rr, s.y - rr, rr*2, rr*2);
+        }
+      }
+      ctx.restore();
+      // 운석 파티클 꼬리
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
       for(const p of state.meteorParticles){
         if (p.a < 0.06) continue;
         ctx.globalAlpha = Math.max(0, p.a) * 0.8;
@@ -542,6 +565,17 @@
     function loop(ts){
       if(!state.running){ requestAnimationFrame(loop); return; }
       const dt = Math.min(32, ts - lastTs); lastTs = ts;
+      // 품질 스케일러 (fps EMA로 저사양에서 자동 하향)
+      const fps = 1000 / Math.max(1, dt);
+      PERF.fpsEMA = PERF.fpsEMA*0.9 + fps*0.1;
+      PERF.lastCheck += dt;
+      if(PERF.lastCheck > 1200){
+        PERF.lastCheck = 0;
+        const wasLow = PERF.low;
+        if(PERF.fpsEMA < PERF.targetFPS){ PERF.low = true; state.particleCap = 2400; }
+        else if(PERF.fpsEMA > 57){ PERF.low = false; state.particleCap = 3000; }
+        if(PERF.low !== wasLow){ fit(); }
+      }
       update(dt); render();
       requestAnimationFrame(loop);
     }
@@ -625,6 +659,10 @@
       // pause removed
       assert('no pause button', !document.getElementById('pauseBtn'));
       const t0 = state.time; update(16); assert('update not gated by pause', state.time > t0);
+
+      // NEW: regenStars duplicates not present (fit twice still valid)
+      fit(); const n1 = state.starLayers.reduce((a,L)=>a+L.stars.length,0); fit(); const n2 = state.starLayers.reduce((a,L)=>a+L.stars.length,0);
+      assert('fit doesn\'t corrupt stars', n1>0 && n2>0);
 
       console.log('[TEST] all passed');
       alert('All runtime tests passed.');

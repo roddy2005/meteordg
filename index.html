@@ -450,7 +450,7 @@
       state.overlayFX.active = true; state.overlayFX.t = 0; state.overlayFX.dir = 1;
       overlay.hidden = false; overlay.style.display = 'flex';
       overlayTitle.textContent = '게임 종료';
-      overlayDesc.textContent = '운석과 충돌했습니다. 닉네임을 입력하고 랭킹에 등록해보세요!';
+      overlayDesc.textContent = '운석과 충돌했습니다. 닉네임을 입력하고 랭킹에 등록해보세요!(학번 이름으로 등록!!)';
       gameOverBlock.hidden = false;
       finalScoreEl.textContent = state.score.toString();
       restartBtn.hidden = false; startBtn.hidden = true;
@@ -696,7 +696,7 @@
     requestAnimationFrame(loop);
 
     overlayTitle.textContent = 'Meteor Dodge';
-    overlayDesc.textContent = '터치를 누르고 드래그하면 비행선이 따라옵니다. 운석을 피해 오래 살아남으세요!';
+    overlayDesc.textContent = '터치를 누르고 드래그하면 비행선이 따라옵니다. 운석을 피해 오래 살아남으세요! 실시간 랭킹 10위 유지 후 축제 당일 부스(본관 2층) 방문시 코인 1개 지급! 랭킹 1등 유지 상태로 부스를 방문하면...?!';
 
     // ───────────────────────
     // Runtime tests (opt-in)
@@ -796,3 +796,4 @@
   -->
 </body>
 </html>
+
